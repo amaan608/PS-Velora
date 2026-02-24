@@ -167,8 +167,8 @@ def main():
     vehicles_df = generate_vehicles_data(8)
     
     # Save to Excel
-    employees_file = 'sample_data/employees.xlsx'
-    vehicles_file = 'sample_data/vehicles.xlsx'
+    employees_file = 'employees.xlsx'
+    vehicles_file = 'vehicles.xlsx'
     
     employees_df.to_excel(employees_file, index=False, engine='openpyxl')
     vehicles_df.to_excel(vehicles_file, index=False, engine='openpyxl')
