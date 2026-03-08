@@ -28,10 +28,10 @@ Find:
 
 ### Solution Approach
 **4-Stage Pipeline:**
-1. **Assignment** - Priority-first greedy algorithm assigns employees to vehicles
-2. **Routing** - Nearest Neighbor Heuristic generates initial routes
-3. **Improvement** - 2-opt algorithm optimizes route order
-4. **Metrics** - Calculate costs, savings, and performance statistics
+1. **Assignment** - Insertion Heuristic calculating real-time marginal routing costs assigning employees to valid vehicle sequences.
+2. **Routing** - Pre-computed assignments processed, falling back to Interleaved Nearest Neighbor routing.
+3. **Improvement** - 2-opt search constrained by dynamic capacity/ETA tracking.
+4. **Metrics** - Calculate costs, savings, and performance statistics.
 
 ---
 
@@ -40,68 +40,69 @@ Find:
 ### Stage 1: Employee-to-Vehicle Assignment
 **File:** `backend/optimizer/assignor.py`
 
-**Algorithm:** Priority-First Greedy Assignment
+**Algorithm:** Cost-Based Insertion Heuristic
 ```
 1. Sort employees by priority (high → normal) then by time_window_start
 2. For each employee (in sorted order):
-   a. Find all vehicles that satisfy constraints
-   b. Calculate distance score from vehicle to employee pickup
-   c. Select closest valid vehicle
-   d. Assign employee to vehicle
-   e. Update vehicle capacity
-3. Return assignments and unassigned employees
+   a. Initialize tracked minimum cost variable
+   b. For each vehicle, simulate inserting pickup/dropoff at every possible indices (i, j)
+   c. Validate sequence constraints (capacity bounds, sharing max, ETAs) dynamically
+   d. Calculate absolute insertion cost = (added_distance * cost_per_km) + delay_penalty
+   e. Record vehicle and exact optimal route sequence producing lowest cost
+3. Asssign and lock optimal route map to vehicle tracking
 ```
 
 **Key Function:** `assign_employees_to_vehicles()`
 
 **Scoring Logic:**
-- Distance-based: `score = haversine(vehicle_location, employee_pickup)`
-- Lower score = better match
-- Greedy approach ensures high-priority employees get first pick
+- **Objective function:** Minimizing actual operating cost `score = (added_dist * vehicle_cost) + delay_penalty`
+- Naturally prefers high capacity, high efficiency vehicles instead of raw naive closest proximity.
 
 **Constraint Checks:**
-- ✅ Vehicle capacity not exceeded
+- ✅ Vehicle capacity strictly met *concurrently* across route segment history
 - ✅ Vehicle category matches employee preference (premium/normal)
-- ✅ Employee's sharing preference satisfied (single/double/triple)
-- ✅ Existing passengers' sharing preferences not violated
+- ✅ Employee's sharing preference constrained against concurrent active riders
+- ✅ Time window ETA delays rigorously simulated for new points
 
 ---
 
 ### Stage 2: Route Generation
 **File:** `backend/optimizer/router.py`
 
-**Algorithm:** Nearest Neighbor Heuristic (Greedy TSP approximation)
+**Algorithm:** Dynamic Interleaved Nearest Neighbor
 
 ```python
 def nearest_neighbor_route(vehicle, employees):
     """
-    Build route by always visiting nearest unvisited employee next.
+    Build route by interleaving pickups and dropoffs based on nearest viable stop.
     """
     route = []
-    current_location = (vehicle['current_lat'], vehicle['current_lng'])
-    unvisited = employees.copy()
+    # Track unpicked and currently seated passengers
     
-    while unvisited:
-        # Find nearest employee to current location
-        nearest = min(unvisited, key=lambda e: 
-            haversine(current_location, (e['pickup_lat'], e['pickup_lng'])))
+    while unpicked_employees or in_vehicle:
+        valid_next_points = []
         
-        route.append(nearest)
-        current_location = (nearest['dest_lat'], nearest['dest_lng'])
-        unvisited.remove(nearest)
-    
-    return route
+        # Add unpicked employees to valid pool IF capacity allows
+        if len(in_vehicle) < vehicle['capacity']:
+            valid_next_points.append(pickups)
+            
+        # Dropoffs for in_vehicle are always valid
+        valid_next_points.append(dropoffs)
+        
+        # nearest = min(valid_next_points)
+        # Advance vehicle to nearest, update ETA and capacity tracking
+        ...
 ```
 
-**Why Nearest Neighbor?**
-- ✅ Fast: O(n²) for n employees per vehicle
-- ✅ Simple to implement and debug
-- ✅ Produces reasonable initial solutions (typically within 25% of optimal)
-- ✅ Works well for small-medium problem sizes (hackathon scale)
+**Why Dynamic Interleaved?**
+- ✅ Resolves massive detours caused by the legacy 2-phase approach (pickup all -> dropoff all).
+- ✅ Adapts efficiently when assignment sequences are unavailable.
 
 **Route Structure:**
 ```
-Vehicle Start → Pickup E1 → Drop E1 → Pickup E2 → Drop E2 → ... → Pickup En → Drop En
+Vehicle Start → Pickup E1 → Drop E1 → Pickup E2 → Drop E2 → ...
+or
+Vehicle Start → Pickup E1 → Pickup E2 → Drop E1 → Drop E2
 ```
 
 ---
@@ -109,12 +110,12 @@ Vehicle Start → Pickup E1 → Drop E1 → Pickup E2 → Drop E2 → ... → Pi
 ### Stage 3: Route Improvement
 **File:** `backend/optimizer/improver.py`
 
-**Algorithm:** 2-opt Local Search
+**Algorithm:** Constrained 2-opt Local Search
 
-The 2-opt algorithm improves routes by reversing segments to eliminate crossing paths.
+The 2-opt algorithm improves routes by reversing segments to eliminate crossing paths, rigorously validated against dynamic time windows, structural capacities, and pickup order integrity at every single experimental shift.
 
 ```python
-def two_opt_improve(route):
+def two_opt_improve(route, vehicle):
     """
     Try all pairs of edges and reverse segments if it improves distance.
     """
@@ -125,21 +126,10 @@ def two_opt_improve(route):
         improved = False
         for i in range(len(best_route) - 1):
             for j in range(i + 2, len(best_route)):
-                # Create new route by reversing segment [i+1:j]
-                new_route = best_route[:i+1] + best_route[i+1:j+1][::-1] + best_route[j+1:]
-                
-                # Calculate distances
-                old_dist = calculate_route_distance(best_route[i:j+2])
-                new_dist = calculate_route_distance(new_route[i:j+2])
-                
-                if new_dist < old_dist:
-                    best_route = new_route
-                    improved = True
-                    break
-            if improved:
-                break
-    
-    return best_route
+                if not is_valid_swap(best_route, i, j):
+                    continue
+                # Calculate distances and update if improved
+                # Valid swaps must protect ETAs, Capacity bounds, and Dropoff Order.
 ```
 
 **Example Visualization:**
@@ -155,9 +145,8 @@ After 2-opt (reverse B-C):
 ```
 
 **Improvement Potential:**
-- Can reduce distance by 5-20% on average
-- More effective when Nearest Neighbor creates crossing routes
-- Converges to local optimum (not guaranteed global)
+- Can reduce distance natively generated routes by 5-20% on average.
+- Never accepts an improvement that creates illegal routing behavior or violates time tolerances.
 
 ---
 
@@ -193,12 +182,11 @@ CO2 Reduction = Distance Saved × Emission Factor
 
 ### 1. Capacity Constraint
 ```python
-def check_capacity_constraint(vehicle, employee):
-    return vehicle['current_capacity_used'] < vehicle['capacity']
+def validate_route_capacity(route, vehicle_capacity):
+    # Tracks concurrent occupancy via pickups and dropoffs
 ```
-- **Hard constraint** - Never exceeded
-- Tracks running count of assigned employees
-- Example: Sedan (capacity=4) can hold max 4 employees
+- **Hard constraint** - Never exceeded concurrently.
+- Replaces naive vehicle-wide tracking with precise node-to-node evaluation.
 
 ### 2. Vehicle Category Preference
 ```python
@@ -212,34 +200,13 @@ def check_vehicle_category_preference(vehicle, employee):
 
 ### 3. Sharing Preference Constraint
 ```python
-def check_sharing_preference_constraint(vehicle, employee):
-    current_count = vehicle['current_capacity_used']
-    new_count = current_count + 1
-    
-    if employee['sharing_preference'] == 'single':
-        return current_count == 0  # Must be alone
-    elif employee['sharing_preference'] == 'double':
-        return new_count <= 2
-    elif employee['sharing_preference'] == 'triple':
-        return new_count <= 3
+def validate_route_sharing(route):
+    # Tracks concurrent riders dynamically along the route
 ```
-- **Hard constraint** - Respects employee comfort levels
-- Enforced for new employee being added
+- **Hard constraint** - Respects comfort dynamically.
+- Evaluates preferences like "single" only against passengers physically inside the vehicle *at the exact moment* the "single" preference rider is onboard.
 
-### 4. Existing Passengers Constraint
-```python
-def check_existing_passengers_sharing_constraint(vehicle, employee):
-    for assigned_emp in vehicle['assigned_employees']:
-        if assigned_emp['sharing_preference'] == 'single':
-            return False  # Can't add anyone
-        elif assigned_emp['sharing_preference'] == 'double' and current_count >= 2:
-            return False
-        # ... etc
-```
-- **Hard constraint** - Protects preferences of already-assigned employees
-- Prevents violating earlier commitments
-
-### 5. Time Window Constraint
+### 4. Time Window Constraint
 ```python
 def check_time_window_feasibility(employee, pickup_eta):
     time_start = employee['time_window_start_min']
@@ -252,10 +219,8 @@ def check_time_window_feasibility(employee, pickup_eta):
     max_delay = 5 if employee['priority'] == 'high' else 15
     return pickup_eta <= (time_end + max_delay)
 ```
-- **Soft constraint** - Allows small delays
-- High priority: max 5 min late
-- Normal priority: max 15 min late
-- Currently not enforced in assignment (simplified for hackathon)
+- **Strictly Evaluated** - Time windows are thoroughly simulated via exact ETAs. 
+- Assignments resulting in delays outside tolerances immediately fail validation during Insertion / 2-Opt.
 
 ### 6. Vehicle Availability
 ```python
@@ -393,11 +358,11 @@ def parse_time(time_str):
 
 | Stage | Algorithm | Complexity | Typical Time |
 |-------|-----------|------------|--------------|
-| Assignment | Priority-first greedy | O(N × M) | <100ms for N=20, M=8 |
-| Routing | Nearest Neighbor | O(M × K²) | <50ms (K=avg employees/vehicle) |
-| Improvement | 2-opt | O(M × K³) | <200ms |
+| Assignment | Cost-Based Insertion | O(N × M × K²) | <200ms for N=20, M=8 |
+| Routing | Dynamic Interleaved nearest | O(M × K²) | <50ms |
+| Improvement | Constrained 2-opt | O(M × K³) | <300ms |
 | Metrics | Distance calculation | O(M × K) | <10ms |
-| **Total** | - | **O(N×M + M×K³)** | **<500ms** |
+| **Total** | - | **O(N×M×K² + M×K³)** | **<600ms** |
 
 Where:
 - N = total employees
