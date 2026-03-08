@@ -1,5 +1,5 @@
 """
-Route generation using Nearest Neighbor Heuristic.
+Route generation.
 Generates optimal pickup and dropoff sequences for each vehicle.
 """
 
@@ -9,23 +9,15 @@ from optimizer.utils import haversine, calculate_travel_time, format_time
 def create_route_point(point_type, employee, lat, lng):
     """
     Create a route point dictionary.
-    
-    Args:
-        point_type: 'pickup' or 'dropoff'
-        employee: Employee dictionary
-        lat: Latitude
-        lng: Longitude
-    
-    Returns:
-        Route point dictionary
     """
     return {
         'type': point_type,
         'emp_id': employee['id'],
         'lat': lat,
         'lng': lng,
-        'eta': None,  # To be calculated
-        'employee': employee  # Keep reference for routing
+        'eta': None,
+        'eta_min': None,
+        'employee': employee
     }
 
 
@@ -35,15 +27,7 @@ def nearest_neighbor_route(vehicle, employees):
     
     Strategy:
     1. Start from vehicle's current location
-    2. Pick up all employees in nearest-first order
-    3. Drop off all employees in nearest-first order from last pickup
-    
-    Args:
-        vehicle: Vehicle dictionary with current location
-        employees: List of employee dictionaries assigned to this vehicle
-    
-    Returns:
-        List of route points in order
+    2. Interleave pickups and dropoffs dynamically based on nearest valid point
     """
     if not employees:
         return []
@@ -53,95 +37,64 @@ def nearest_neighbor_route(vehicle, employees):
     current_lng = vehicle['current_lng']
     current_time = vehicle['available_from_min']
     
-    # Create pickup points for all employees
-    pickup_points = [
-        create_route_point('pickup', emp, emp['pickup_lat'], emp['pickup_lng'])
-        for emp in employees
-    ]
+    unpicked_employees = employees.copy()
+    in_vehicle = []
     
-    # Phase 1: Pick up all employees using nearest neighbor
-    remaining_pickups = pickup_points.copy()
+    capacity = vehicle['capacity']
     
-    while remaining_pickups:
-        # Find nearest pickup point
+    while unpicked_employees or in_vehicle:
+        valid_next_points = []
+        
+        # We can pick up if we have capacity
+        if len(in_vehicle) < capacity:
+            for emp in unpicked_employees:
+                valid_next_points.append(
+                    create_route_point('pickup', emp, emp['pickup_lat'], emp['pickup_lng'])
+                )
+                
+        # We can drop off anyone currently in the vehicle
+        for emp in in_vehicle:
+            valid_next_points.append(
+                create_route_point('dropoff', emp, emp['dest_lat'], emp['dest_lng'])
+            )
+            
+        if not valid_next_points:
+            break
+            
         nearest_point = None
         nearest_distance = float('inf')
         
-        for point in remaining_pickups:
+        for point in valid_next_points:
             distance = haversine(current_lat, current_lng, point['lat'], point['lng'])
             if distance < nearest_distance:
                 nearest_distance = distance
                 nearest_point = point
         
-        # Travel to pickup point
         travel_time = calculate_travel_time(nearest_distance, vehicle['avg_speed'])
         current_time += travel_time
         
-        # Update ETA for this pickup
         nearest_point['eta'] = format_time(current_time)
         nearest_point['eta_min'] = current_time
         
-        # Add to route
         route.append(nearest_point)
         
-        # Update current position
         current_lat = nearest_point['lat']
         current_lng = nearest_point['lng']
         
-        # Remove from remaining
-        remaining_pickups.remove(nearest_point)
-    
-    # Phase 2: Drop off all employees using nearest neighbor
-    dropoff_points = [
-        create_route_point('dropoff', emp, emp['dest_lat'], emp['dest_lng'])
-        for emp in employees
-    ]
-    
-    remaining_dropoffs = dropoff_points.copy()
-    
-    while remaining_dropoffs:
-        # Find nearest dropoff point
-        nearest_point = None
-        nearest_distance = float('inf')
-        
-        for point in remaining_dropoffs:
-            distance = haversine(current_lat, current_lng, point['lat'], point['lng'])
-            if distance < nearest_distance:
-                nearest_distance = distance
-                nearest_point = point
-        
-        # Travel to dropoff point
-        travel_time = calculate_travel_time(nearest_distance, vehicle['avg_speed'])
-        current_time += travel_time
-        
-        # Update ETA for this dropoff
-        nearest_point['eta'] = format_time(current_time)
-        nearest_point['eta_min'] = current_time
-        
-        # Add to route
-        route.append(nearest_point)
-        
-        # Update current position
-        current_lat = nearest_point['lat']
-        current_lng = nearest_point['lng']
-        
-        # Remove from remaining
-        remaining_dropoffs.remove(nearest_point)
-    
+        if nearest_point['type'] == 'pickup':
+            emp = nearest_point['employee']
+            unpicked_employees = [e for e in unpicked_employees if e['id'] != emp['id']]
+            in_vehicle.append(emp)
+        elif nearest_point['type'] == 'dropoff':
+            emp = nearest_point['employee']
+            in_vehicle = [e for e in in_vehicle if e['id'] != emp['id']]
+            
     return route
 
 
 def calculate_route_distance(route, vehicle_start_lat, vehicle_start_lng):
     """
     Calculate total distance for a route.
-    
-    Args:
-        route: List of route points
-        vehicle_start_lat: Vehicle starting latitude
-        vehicle_start_lng: Vehicle starting longitude
-    
-    Returns:
-        Total distance in kilometers
     """
     if not route:
         return 0.0
@@ -162,19 +115,12 @@ def calculate_route_distance(route, vehicle_start_lat, vehicle_start_lng):
 def calculate_route_time(route, vehicle):
     """
     Calculate total time for a route from vehicle availability to last dropoff.
-    
-    Args:
-        route: List of route points with eta_min
-        vehicle: Vehicle dictionary
-    
-    Returns:
-        Total time in minutes
     """
     if not route:
         return 0
     
     start_time = vehicle['available_from_min']
-    end_time = route[-1]['eta_min']
+    end_time = route[-1].get('eta_min', start_time)
     
     return end_time - start_time
 
@@ -182,13 +128,8 @@ def calculate_route_time(route, vehicle):
 def generate_routes_for_all_vehicles(assignments, vehicles):
     """
     Generate routes for all vehicles with assignments.
-    
-    Args:
-        assignments: Dict mapping vehicle_id to list of employees
-        vehicles: List of vehicle dictionaries
-    
-    Returns:
-        Dict mapping vehicle_id to route information
+    Uses pre-computed route if available from assignment heuristic, 
+    otherwise falls back to nearest neighbor interleaving.
     """
     vehicle_map = {v['id']: v for v in vehicles}
     routes = {}
@@ -196,10 +137,11 @@ def generate_routes_for_all_vehicles(assignments, vehicles):
     for vehicle_id, employees in assignments.items():
         vehicle = vehicle_map[vehicle_id]
         
-        # Generate route using nearest neighbor
-        route = nearest_neighbor_route(vehicle, employees)
+        if 'route' in vehicle and vehicle['route']:
+            route = vehicle['route']
+        else:
+            route = nearest_neighbor_route(vehicle, employees)
         
-        # Calculate metrics
         total_distance = calculate_route_distance(
             route,
             vehicle['current_lat'],
@@ -207,21 +149,10 @@ def generate_routes_for_all_vehicles(assignments, vehicles):
         )
         total_time = calculate_route_time(route, vehicle)
         
-        # Clean up route points (remove employee reference)
-        clean_route = []
-        for point in route:
-            clean_route.append({
-                'type': point['type'],
-                'emp_id': point['emp_id'],
-                'lat': point['lat'],
-                'lng': point['lng'],
-                'eta': point['eta']
-            })
-        
         routes[vehicle_id] = {
             'vehicle_id': vehicle_id,
             'assigned_employees': [emp['id'] for emp in employees],
-            'route': clean_route,
+            'route': route,
             'total_distance_km': round(total_distance, 2),
             'total_time_min': round(total_time, 2)
         }
