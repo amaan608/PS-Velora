@@ -140,12 +140,12 @@ def calculate_all_metrics(routes, vehicles, employees):
     total_distance = calculate_total_distance(routes)
     
     metrics = {
-        'total_cost_optimized': round(optimized_cost, 2),
-        'total_cost_baseline': round(baseline_cost, 2),
-        'savings_absolute': round(savings_absolute, 2),
-        'savings_percentage': round(savings_percentage, 2),
-        'total_travel_time_min': round(total_travel_time, 2),
-        'total_distance_km': round(total_distance, 2),
+        'total_cost_optimized': round(float(optimized_cost), 2),
+        'total_cost_baseline': round(float(baseline_cost), 2),
+        'savings_absolute': round(float(savings_absolute), 2),
+        'savings_percentage': round(float(savings_percentage), 2),
+        'total_travel_time_min': round(float(total_travel_time), 2),
+        'total_distance_km': round(float(total_distance), 2),
         'num_vehicles_used': len(routes),
         'num_employees': len(employees)
     }
@@ -170,14 +170,25 @@ def get_vehicle_metrics(routes, vehicles):
     for vehicle_id, route_info in routes.items():
         vehicle = vehicle_map[vehicle_id]
         
+        max_cap_used = 0
+        current_cap = 0
+        for pt in route_info['route']:
+            if pt.get('type') == 'pickup':
+                current_cap += 1
+                max_cap_used = max(max_cap_used, current_cap)
+            elif pt.get('type') == 'dropoff':
+                current_cap -= 1
+                
+        utilization = (max_cap_used / vehicle['capacity']) * 100 if vehicle['capacity'] else 0
+        
         metrics = {
             'vehicle_id': vehicle_id,
             'distance_km': route_info['total_distance_km'],
             'travel_time_min': route_info['total_time_min'],
             'num_employees': len(route_info['assigned_employees']),
             'capacity': vehicle['capacity'],
-            'utilization_percent': round((len(route_info['assigned_employees']) / vehicle['capacity']) * 100, 2),
-            'cost': round(route_info['total_distance_km'] * vehicle['cost_per_km'], 2)
+            'utilization_percent': round(float(utilization), 2),
+            'cost': round(float(route_info['total_distance_km'] * vehicle['cost_per_km']), 2)
         }
         
         vehicle_metrics.append(metrics)
