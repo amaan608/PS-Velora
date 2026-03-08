@@ -159,8 +159,21 @@ def optimize(request):
         vehicle_metrics = get_vehicle_metrics(improved_routes, vehicles_copy)
         
         # Prepare final results with unassigned info
+        # Clean up route objects before serialization
+        final_vehicles = []
+        for v in improved_routes.values():
+            clean_routes = []
+            for point in v['route']:
+                clean_pt = point.copy()
+                if 'employee' in clean_pt:
+                    del clean_pt['employee']
+                clean_routes.append(clean_pt)
+            v_copy = v.copy()
+            v_copy['route'] = clean_routes
+            final_vehicles.append(v_copy)
+
         results = {
-            'vehicles': list(improved_routes.values()),
+            'vehicles': final_vehicles,
             'metrics': metrics,
             'vehicle_metrics': vehicle_metrics,
             'unassigned_employees': len(unassigned),
