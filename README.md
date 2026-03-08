@@ -4,12 +4,12 @@
 
 ## 🚀 Features
 
-- **Smart Route Optimization**: Nearest Neighbor Heuristic with 2-opt improvement algorithm
-- **Cost Savings**: Save up to 60% compared to individual cab rides through intelligent vehicle sharing
-- **Priority-Based Assignment**: High-priority employees get preferential treatment with stricter time constraints
-- **Constraint Validation**: Respects vehicle capacity, sharing preferences, and time windows
-- **Interactive Dashboard**: Real-time map visualization with route polylines and detailed metrics
-- **Pure Python Implementation**: No third-party optimization APIs - all algorithms built from scratch
+- **Smart Route Optimization**: Advanced Insertion Heuristics with interleaved dynamic Nearest Neighbor and 2-opt search processing.
+- **Cost Savings**: Reduce total transportation expenses by optimizing for comprehensive operational factors rather than simple distance.
+- **Priority-Based Assignment**: High-priority employees get preferential treatment with stricter dynamic time window constraints.
+- **Concurrent Constraint Validation**: Respects precise vehicle capacity, concurrent sharing preferences dynamically on route interleaving, and real-time ETAs.
+- **Interactive Dashboard**: Real-time map visualization with route polylines and detailed metrics.
+- **Pure Python Implementation**: No third-party optimization APIs - all algorithms built from scratch.
 
 ## 🛠️ Tech Stack
 
@@ -70,22 +70,22 @@ velora/
 ## 🧮 Optimization Approach
 
 ### 1. Employee-to-Vehicle Assignment
-- **Priority-first greedy algorithm**
-- High-priority employees assigned first
-- Closest available vehicle selected based on Haversine distance
-- Validates capacity, sharing preferences, and time windows
+- **Cost-Based Insertion Heuristic**
+- High-priority and earliest scheduled employees processed first.
+- Simulates exact routing scenarios to insert pickups and dropoffs precisely into available valid route configurations.
+- Selects assignment producing lowest marginal cost: `(added_dist * cost_per_km) + delay_penalty`.
+- Strongly enforced concurrent constraint checking built-in via time-window simulation.
 
 ### 2. Route Generation
-- **Nearest Neighbor Heuristic**
-- Starts from vehicle's current location
-- Picks up employees in nearest-first order
-- Drops off employees in nearest-first order after all pickups
+- **Dynamic Interleaved Nearest Neighbor Approach**
+- Processes predefined sequences sourced from the optimal assignment insertion.
+- When generating fallbacks, interleaves unpicked employee pickups against dropoffs dynamically evaluating capacity thresholds in real-time.
 
 ### 3. Route Improvement
-- **2-opt algorithm**
-- Iteratively swaps route segments to reduce total distance
-- Maintains pickup-before-dropoff constraint for each employee
-- Converges to local optimum
+- **Constrained 2-opt algorithm**
+- Iteratively swaps route segments to reduce total distance.
+- Strictly validates experimental segment loops against capacities, sharing limits, and priority time windows using precise simulated ETAs to preserve validity.
+- Converges to tight local optimums preserving route legality.
 
 ### 4. Metrics Calculation
 - **Optimized cost** = Σ(distance × cost_per_km) for all vehicles
